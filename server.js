@@ -127,7 +127,7 @@ export const sendOTP = async (to, otp, purpose = 'email verification') => {
     const subject = purpose === 'password reset' ? 'Reset Your JLearn Password' : 'Verify Your Email with Jairisys';
     const html = purpose === 'password reset'
       ? `<p>Your password reset OTP is: <strong>${otp}</strong></p><p>It will expire in 10 minutes.</p>`
-      : `<p>Your OTP code is: <strong>${otp}</strong></p><p>It will expire in 10 minutes.</p>`;
+      : `<p>Your OTP code is: <strong>${otp}</strong></p><p>It will expire in 10 minutes. Please verify within this time, or your account will be deleted.</p>`;
 
     const info = await transporter.sendMail({
       from: `"JLearn" <${process.env.EMAIL_USER}>`,
@@ -330,24 +330,51 @@ app.post('/signup', async (req, res) => {
     // Hash the password
     const passwordHash = await bcrypt.hash(password, 10);
 
-    await db.execute({
-      sql: 'INSERT INTO user_profiles (username, email, password_hash, is_verified, created_at) VALUES (?, ?, ?, ?, ?)',
-      args: [username, email, passwordHash, false, signupTime],
-    });
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    // Calculate expiration time (10 minutes from now)
     const expiresAt = Date.now() + 10 * 60 * 1000;
 
+    // Insert user with expiration time
+    await db.execute({
+      sql: 'INSERT INTO user_profiles (username, email, password_hash, is_verified, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
+      args: [username, email, passwordHash, false, signupTime, expiresAt],
+    });
+
+    // Generate and store OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
     await db.execute({
       sql: 'INSERT OR REPLACE INTO user_otp_verification (email, otp, expires_at, created_at) VALUES (?, ?, ?, ?)',
       args: [email, otp, expiresAt, signupTime],
     });
 
+    // Schedule deletion of unverified user after 10 minutes
+    setTimeout(async () => {
+      try {
+        const result = await db.execute({
+          sql: 'SELECT is_verified FROM user_profiles WHERE email = ?',
+          args: [email],
+        });
+
+        if (result.rows.length > 0 && !result.rows[0].is_verified) {
+          await db.execute({
+            sql: 'DELETE FROM user_profiles WHERE email = ?',
+            args: [email],
+          });
+          await db.execute({
+            sql: 'DELETE FROM user_otp_verification WHERE email = ?',
+            args: [email],
+          });
+          console.log(`Deleted unverified user ${email} at ${getISTTimestamp()}`);
+        }
+      } catch (err) {
+        console.error(`Error deleting unverified user ${email} at ${getISTTimestamp()}:`, err);
+      }
+    }, 10 * 60 * 1000); // 10 minutes
+
     try {
       await sendOTP(email, otp);
       res.status(200).json({
         success: true,
-        message: 'Signup successful. OTP sent to your email.',
+        message: 'Signup successful. OTP sent to your email. Please verify within 10 minutes.',
         timestamp: signupTime,
       });
     } catch (emailErr) {
@@ -355,7 +382,7 @@ app.post('/signup', async (req, res) => {
       console.warn('OTP for testing (check database or resend):', otp);
       res.status(200).json({
         success: true,
-        message: 'Signup successful, but OTP email failed to send. OTP logged to console and stored in database. Please check or request a new OTP.',
+        message: 'Signup successful, but OTP email failed to send. OTP logged to console and stored in database. Please verify within 10 minutes.',
         timestamp: signupTime,
       });
     }
@@ -365,6 +392,7 @@ app.post('/signup', async (req, res) => {
   }
 });
 
+// Verify OTP
 app.post('/verify-otp', async (req, res) => {
   const { email, otp } = req.body;
   const verifyTime = getISTTimestamp();
@@ -375,6 +403,16 @@ app.post('/verify-otp', async (req, res) => {
 
   try {
     const db = getDB();
+
+    // Check if user exists
+    const userResult = await db.execute({
+      sql: 'SELECT user_id FROM user_profiles WHERE email = ?',
+      args: [email],
+    });
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found. Account may have been deleted due to unverified status.', timestamp: verifyTime });
+    }
 
     const result = await db.execute({
       sql: 'SELECT otp, expires_at FROM user_otp_verification WHERE email = ?',
@@ -389,19 +427,25 @@ app.post('/verify-otp', async (req, res) => {
     const expiresAt = result.rows[0].expires_at;
 
     if (Date.now() > expiresAt) {
+      // Delete user and OTP if expired
+      await db.execute({
+        sql: 'DELETE FROM user_profiles WHERE email = ?',
+        args: [email],
+      });
       await db.execute({
         sql: 'DELETE FROM user_otp_verification WHERE email = ?',
         args: [email],
       });
-      return res.status(400).json({ error: 'OTP expired', timestamp: verifyTime });
+      return res.status(400).json({ error: 'OTP expired. Account deleted. Please sign up again.', timestamp: verifyTime });
     }
 
     if (otp !== storedOTP) {
       return res.status(400).json({ error: 'Invalid OTP', timestamp: verifyTime });
     }
 
+    // Mark user as verified and clear expiration
     await db.execute({
-      sql: 'UPDATE user_profiles SET is_verified = ? WHERE email = ?',
+      sql: 'UPDATE user_profiles SET is_verified = ?, expires_at = NULL WHERE email = ?',
       args: [true, email],
     });
 
@@ -562,7 +606,7 @@ app.post('/reset-password', async (req, res) => {
   }
 });
 
-// Resend Otp
+// Resend OTP
 app.post('/resend-otp', async (req, res) => {
   const { email } = req.body;
   const resendTime = getISTTimestamp();
@@ -575,16 +619,29 @@ app.post('/resend-otp', async (req, res) => {
     const db = getDB();
 
     const result = await db.execute({
-      sql: 'SELECT is_verified FROM user_profiles WHERE email = ?',
+      sql: 'SELECT is_verified, expires_at FROM user_profiles WHERE email = ?',
       args: [email],
     });
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found', timestamp: resendTime });
+      return res.status(404).json({ error: 'User not found. Account may have been deleted due to unverified status.', timestamp: resendTime });
     }
 
     if (result.rows[0].is_verified) {
       return res.status(400).json({ error: 'Email already verified', timestamp: resendTime });
+    }
+
+    if (Date.now() > result.rows[0].expires_at) {
+      // Delete user and OTP if expired
+      await db.execute({
+        sql: 'DELETE FROM user_profiles WHERE email = ?',
+        args: [email],
+      });
+      await db.execute({
+        sql: 'DELETE FROM user_otp_verification WHERE email = ?',
+        args: [email],
+      });
+      return res.status(400).json({ error: 'Verification period expired. Account deleted. Please sign up again.', timestamp: resendTime });
     }
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -597,13 +654,13 @@ app.post('/resend-otp', async (req, res) => {
 
     try {
       await sendOTP(email, otp);
-      res.status(200).json({ success: true, message: 'OTP resent successfully.', timestamp: resendTime });
+      res.status(200).json({ success: true, message: 'OTP resent successfully. Please verify within 10 minutes.', timestamp: resendTime });
     } catch (emailErr) {
       console.warn('OTP generated, but email failed to send for', email);
       console.warn('OTP for testing (check database or resend):', otp);
       res.status(200).json({
         success: true,
-        message: 'OTP generated, but email failed to send. OTP logged to console and stored in database. Please try again.',
+        message: 'OTP generated, but email failed to send. OTP logged to console and stored in database. Please verify within 10 minutes.',
         timestamp: resendTime,
       });
     }
@@ -827,4 +884,5 @@ app.listen(PORT, () => {
   console.log('- Bitmask progress tracking');
   console.log('- Email verification required:', REQUIRE_EMAIL_VERIFICATION);
   console.log('- Email service configured:', !!process.env.EMAIL_USER && !!process.env.EMAIL_PASS);
+  console.log('- Auto-delete unverified users after 10 minutes');
 });
