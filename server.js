@@ -11,16 +11,13 @@ import admin from 'firebase-admin';
 // Load environment variables
 dotenv.config();
 
-// Initialize Express app
 const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET;
 const REQUIRE_EMAIL_VERIFICATION = process.env.REQUIRE_EMAIL_VERIFICATION === 'true';
 
-// In production, use Redis instead of in-memory Set
 const activeTokens = new Set();
 
-// Firebase Admin SDK Initialization
 let firebaseCredentials;
 try {
   firebaseCredentials = JSON.parse(process.env.FIREBASE_CREDENTIALS);
@@ -29,14 +26,12 @@ try {
   process.exit(1);
 }
 
-// Initialize Firebase Admin SDK
 admin.initializeApp({
   credential: admin.credential.cert(firebaseCredentials)
 });
 
 const firebaseInitialized = true;
 
-// Middleware
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
@@ -45,15 +40,13 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Helper function to get current IST time
 function getISTTimestamp() {
   const now = new Date();
-  const ISTOffset = 330; // IST is UTC+5:30 (5*60 + 30 = 330 minutes)
+  const ISTOffset = 330;
   const ISTTime = new Date(now.getTime() + (ISTOffset - now.getTimezoneOffset()) * 60000);
   return ISTTime.toISOString().replace('T', ' ').replace('.000Z', '');
 }
 
-// Health check endpoint with IST timestamp
 app.get('/', (req, res) => {
   res.status(200).json({
     status: 'healthy',
@@ -68,7 +61,6 @@ app.get('/', (req, res) => {
   });
 });
 
-// Initialize database
 (async () => {
   try {
     await initDB();
@@ -79,27 +71,21 @@ app.get('/', (req, res) => {
   }
 })();
 
-// Enhanced Authentication Middleware
 const authenticateJWT = (req, res, next) => {
   const authHeader = req.headers.authorization || req.query.token;
-
   if (!authHeader) {
     return res.status(401).json({
       error: 'Authorization header missing',
       timestamp: getISTTimestamp()
     });
   }
-
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
-
-  // Check if token was invalidated
   if (!activeTokens.has(token)) {
     return res.status(403).json({
       error: 'Session terminated. Please login again.',
       timestamp: getISTTimestamp()
     });
   }
-
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) {
       console.error('JWT verification error at', getISTTimestamp(), ':', err);
@@ -113,7 +99,6 @@ const authenticateJWT = (req, res, next) => {
   });
 };
 
-// Email sender
 export const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -128,7 +113,6 @@ export const sendOTP = async (to, otp, purpose = 'email verification') => {
     const html = purpose === 'password reset'
       ? `<p>Your password reset OTP is: <strong>${otp}</strong></p><p>It will expire in 10 minutes.</p>`
       : `<p>Your OTP code is: <strong>${otp}</strong></p><p>It will expire in 10 minutes. Please verify within this time, or your account will be deleted.</p>`;
-
     const info = await transporter.sendMail({
       from: `"JLearn" <${process.env.EMAIL_USER}>`,
       to,
@@ -144,6 +128,39 @@ export const sendOTP = async (to, otp, purpose = 'email verification') => {
   }
 };
 
+// XP Utility Functions
+async function addXpToUser(userId, xp) {
+  const db = getDB();
+  await db.execute({
+    sql: `
+      INSERT INTO user_achievements (user_id, xp_points)
+      VALUES (?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET xp_points = xp_points + ?
+    `,
+    args: [userId, xp, xp]
+  });
+}
+
+async function checkAllModulesCompletedForLevel(userId, language, level) {
+  const db = getDB();
+  const { rows: modules } = await db.execute({
+    sql: 'SELECT module_id, total_lessons FROM lesson_details WHERE language = ? AND level = ?',
+    args: [language, level]
+  });
+  if (modules.length === 0) return false;
+  const { rows: progress } = await db.execute({
+    sql: 'SELECT module_id, completion_mask FROM user_module_progress WHERE user_id = ? AND language = ? AND level = ?',
+    args: [userId, language, level]
+  });
+  const progressMap = new Map(progress.map(p => [p.module_id, p.completion_mask]));
+  for (const module of modules) {
+    const mask = progressMap.get(module.module_id) || 0;
+    const allLessonsMask = (1 << module.total_lessons) - 1;
+    if ((mask & allLessonsMask) !== allLessonsMask) return false;
+  }
+  return true;
+}
+
 // Google Sign-In (Firebase Auth) Endpoint
 app.post('/auth/google', async (req, res) => {
   if (!firebaseInitialized) {
@@ -153,53 +170,38 @@ app.post('/auth/google', async (req, res) => {
       timestamp: getISTTimestamp()
     });
   }
-
   const { token: firebaseToken } = req.body;
-
   if (!firebaseToken) {
     return res.status(400).json({
       error: 'Firebase ID token is required',
       timestamp: getISTTimestamp()
     });
   }
-
   try {
-    // Verify Firebase ID token
     const decodedToken = await admin.auth().verifyIdToken(firebaseToken);
     const { uid, email } = decodedToken;
-
     const db = getDB();
-
-    // Check if user exists
     let user = await db.execute({
       sql: 'SELECT user_id, username, email FROM user_profiles WHERE email = ?',
       args: [email],
     });
-
     if (user.rows.length === 0) {
       return res.status(404).json({
         error: 'User not found. Please sign up first using email/password.',
         timestamp: getISTTimestamp()
       });
     }
-
     const userId = user.rows[0].user_id;
     const username = user.rows[0].username;
-
-    // Update last login
     await db.execute({
       sql: 'UPDATE user_profiles SET last_login = ? WHERE user_id = ?',
       args: [getISTTimestamp(), userId],
     });
-
-    // Generate JWT
     const appToken = jwt.sign(
       { id: userId, email, username },
       JWT_SECRET
     );
-
     activeTokens.add(appToken);
-
     res.json({
       success: true,
       token: appToken,
@@ -211,7 +213,6 @@ app.post('/auth/google', async (req, res) => {
       },
       timestamp: getISTTimestamp()
     });
-
   } catch (err) {
     console.error('Firebase auth error at', getISTTimestamp(), ':', err);
     res.status(401).json({
@@ -225,21 +226,18 @@ app.post('/auth/google', async (req, res) => {
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
   const loginTime = getISTTimestamp();
-
   if (!email || !password) {
     return res.status(400).json({
       error: 'Email and password are required',
       timestamp: loginTime
     });
   }
-
   try {
     const db = getDB();
     const result = await db.execute({
       sql: 'SELECT user_id, username, email, password_hash, is_google_auth, is_verified FROM user_profiles WHERE email = ?',
       args: [email],
     });
-
     const user = result.rows[0];
     if (!user) {
       return res.status(401).json({
@@ -247,23 +245,18 @@ app.post('/login', async (req, res) => {
         timestamp: loginTime
       });
     }
-
-    // Check if user registered via Google
     if (user.is_google_auth) {
       return res.status(403).json({
         error: 'This account uses Google Sign-In. Please sign in with Google.',
         timestamp: loginTime
       });
     }
-
-    // Check email verification if required
     if (REQUIRE_EMAIL_VERIFICATION && !user.is_verified) {
       return res.status(403).json({
         error: 'Email not verified. Please verify your email to log in.',
         timestamp: loginTime
       });
     }
-
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
       return res.status(401).json({
@@ -271,20 +264,15 @@ app.post('/login', async (req, res) => {
         timestamp: loginTime
       });
     }
-
-    // Update last login
     await db.execute({
       sql: 'UPDATE user_profiles SET last_login = ? WHERE user_id = ?',
       args: [loginTime, user.user_id],
     });
-
     const token = jwt.sign(
       { id: user.user_id, email: user.email, username: user.username },
       JWT_SECRET
     );
-
     activeTokens.add(token);
-
     res.json({
       success: true,
       token,
@@ -310,50 +298,35 @@ app.post('/login', async (req, res) => {
 app.post('/signup', async (req, res) => {
   const { username, email, password } = req.body;
   const signupTime = getISTTimestamp();
-
   if (!username || !email || !password) {
     return res.status(400).json({ error: 'All fields are required', timestamp: signupTime });
   }
-
   try {
     const db = getDB();
-
     const checkUser = await db.execute({
       sql: 'SELECT * FROM user_profiles WHERE email = ?',
       args: [email],
     });
-
     if (checkUser.rows.length > 0) {
       return res.status(400).json({ error: 'Email already registered', timestamp: signupTime });
     }
-
-    // Hash the password
     const passwordHash = await bcrypt.hash(password, 10);
-
-    // Calculate expiration time (10 minutes from now)
     const expiresAt = Date.now() + 10 * 60 * 1000;
-
-    // Insert user with expiration time
     await db.execute({
       sql: 'INSERT INTO user_profiles (username, email, password_hash, is_verified, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
       args: [username, email, passwordHash, false, signupTime, expiresAt],
     });
-
-    // Generate and store OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     await db.execute({
       sql: 'INSERT OR REPLACE INTO user_otp_verification (email, otp, expires_at, created_at) VALUES (?, ?, ?, ?)',
       args: [email, otp, expiresAt, signupTime],
     });
-
-    // Schedule deletion of unverified user after 10 minutes
     setTimeout(async () => {
       try {
         const result = await db.execute({
           sql: 'SELECT is_verified FROM user_profiles WHERE email = ?',
           args: [email],
         });
-
         if (result.rows.length > 0 && !result.rows[0].is_verified) {
           await db.execute({
             sql: 'DELETE FROM user_profiles WHERE email = ?',
@@ -369,7 +342,6 @@ app.post('/signup', async (req, res) => {
         console.error(`Error deleting unverified user ${email} at ${getISTTimestamp()}:`, err);
       }
     }, 10 * 60 * 1000); // 10 minutes
-
     try {
       await sendOTP(email, otp);
       res.status(200).json({
@@ -396,38 +368,28 @@ app.post('/signup', async (req, res) => {
 app.post('/verify-otp', async (req, res) => {
   const { email, otp } = req.body;
   const verifyTime = getISTTimestamp();
-
   if (!email || !otp) {
     return res.status(400).json({ error: 'Email and OTP are required', timestamp: verifyTime });
   }
-
   try {
     const db = getDB();
-
-    // Check if user exists
     const userResult = await db.execute({
       sql: 'SELECT user_id FROM user_profiles WHERE email = ?',
       args: [email],
     });
-
     if (userResult.rows.length === 0) {
       return res.status(404).json({ error: 'User not found. Account may have been deleted due to unverified status.', timestamp: verifyTime });
     }
-
     const result = await db.execute({
       sql: 'SELECT otp, expires_at FROM user_otp_verification WHERE email = ?',
       args: [email],
     });
-
     if (result.rows.length === 0) {
       return res.status(400).json({ error: 'No OTP found for this email', timestamp: verifyTime });
     }
-
     const storedOTP = result.rows[0].otp;
     const expiresAt = result.rows[0].expires_at;
-
     if (Date.now() > expiresAt) {
-      // Delete user and OTP if expired
       await db.execute({
         sql: 'DELETE FROM user_profiles WHERE email = ?',
         args: [email],
@@ -438,22 +400,17 @@ app.post('/verify-otp', async (req, res) => {
       });
       return res.status(400).json({ error: 'OTP expired. Account deleted. Please sign up again.', timestamp: verifyTime });
     }
-
     if (otp !== storedOTP) {
       return res.status(400).json({ error: 'Invalid OTP', timestamp: verifyTime });
     }
-
-    // Mark user as verified and clear expiration
     await db.execute({
       sql: 'UPDATE user_profiles SET is_verified = ?, expires_at = NULL WHERE email = ?',
       args: [true, email],
     });
-
     await db.execute({
       sql: 'DELETE FROM user_otp_verification WHERE email = ?',
       args: [email],
     });
-
     res.status(200).json({ success: true, message: 'Email verified successfully', timestamp: verifyTime });
   } catch (err) {
     console.error('Verification error at', verifyTime, ':', err);
@@ -465,22 +422,18 @@ app.post('/verify-otp', async (req, res) => {
 app.post('/forgot-password', async (req, res) => {
   const { email } = req.body;
   const requestTime = getISTTimestamp();
-
   if (!email) {
     return res.status(400).json({ error: 'Email is required', timestamp: requestTime });
   }
-
   try {
     const db = getDB();
     const result = await db.execute({
       sql: 'SELECT user_id, is_google_auth FROM user_profiles WHERE email = ?',
       args: [email],
     });
-
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Email not found', timestamp: requestTime });
     }
-
     const user = result.rows[0];
     if (user.is_google_auth) {
       return res.status(400).json({
@@ -488,15 +441,12 @@ app.post('/forgot-password', async (req, res) => {
         timestamp: requestTime,
       });
     }
-
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
-
+    const expiresAt = Date.now() + 10 * 60 * 1000;
     await db.execute({
       sql: 'INSERT OR REPLACE INTO user_otp_verification (email, otp, expires_at, created_at) VALUES (?, ?, ?, ?)',
       args: [email, otp, expiresAt, requestTime],
     });
-
     try {
       await sendOTP(email, otp, 'password reset');
       res.status(200).json({
@@ -519,30 +469,23 @@ app.post('/forgot-password', async (req, res) => {
   }
 });
 
-// Reset Password Endpoint
 app.post('/reset-password', async (req, res) => {
   const { email, otp, newPassword } = req.body;
   const resetTime = getISTTimestamp();
-
   if (!email || !otp || !newPassword) {
     return res.status(400).json({ error: 'Email, OTP, and new password are required', timestamp: resetTime });
   }
-
   try {
     const db = getDB();
-
     const otpResult = await db.execute({
       sql: 'SELECT otp, expires_at FROM user_otp_verification WHERE email = ?',
       args: [email],
     });
-
     if (otpResult.rows.length === 0) {
       return res.status(400).json({ error: 'No OTP found for this email', timestamp: resetTime });
     }
-
     const storedOTP = otpResult.rows[0].otp;
     const expiresAt = otpResult.rows[0].expires_at;
-
     if (Date.now() > expiresAt) {
       await db.execute({
         sql: 'DELETE FROM user_otp_verification WHERE email = ?',
@@ -550,20 +493,16 @@ app.post('/reset-password', async (req, res) => {
       });
       return res.status(400).json({ error: 'OTP expired', timestamp: resetTime });
     }
-
     if (otp !== storedOTP) {
       return res.status(400).json({ error: 'Invalid OTP', timestamp: resetTime });
     }
-
     const userResult = await db.execute({
       sql: 'SELECT user_id, is_google_auth FROM user_profiles WHERE email = ?',
       args: [email],
     });
-
     if (userResult.rows.length === 0) {
       return res.status(404).json({ error: 'User not found', timestamp: resetTime });
     }
-
     const user = userResult.rows[0];
     if (user.is_google_auth) {
       return res.status(400).json({
@@ -571,20 +510,15 @@ app.post('/reset-password', async (req, res) => {
         timestamp: resetTime,
       });
     }
-
     const passwordHash = await bcrypt.hash(newPassword, 10);
-
     await db.execute({
       sql: 'UPDATE user_profiles SET password_hash = ? WHERE email = ?',
       args: [passwordHash, email],
     });
-
     await db.execute({
       sql: 'DELETE FROM user_otp_verification WHERE email = ?',
       args: [email],
     });
-
-    // Invalidate all active tokens for this user
     const tokensToRemove = [...activeTokens].filter(token => {
       try {
         const decoded = jwt.verify(token, JWT_SECRET);
@@ -594,7 +528,6 @@ app.post('/reset-password', async (req, res) => {
       }
     });
     tokensToRemove.forEach(token => activeTokens.delete(token));
-
     res.status(200).json({
       success: true,
       message: 'Password reset successfully. All active sessions have been invalidated.',
@@ -606,33 +539,25 @@ app.post('/reset-password', async (req, res) => {
   }
 });
 
-// Resend OTP
 app.post('/resend-otp', async (req, res) => {
   const { email } = req.body;
   const resendTime = getISTTimestamp();
-
   if (!email) {
     return res.status(400).json({ error: 'Email is required', timestamp: resendTime });
   }
-
   try {
     const db = getDB();
-
     const result = await db.execute({
       sql: 'SELECT is_verified, expires_at FROM user_profiles WHERE email = ?',
       args: [email],
     });
-
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'User not found. Account may have been deleted due to unverified status.', timestamp: resendTime });
     }
-
     if (result.rows[0].is_verified) {
       return res.status(400).json({ error: 'Email already verified', timestamp: resendTime });
     }
-
     if (Date.now() > result.rows[0].expires_at) {
-      // Delete user and OTP if expired
       await db.execute({
         sql: 'DELETE FROM user_profiles WHERE email = ?',
         args: [email],
@@ -643,15 +568,12 @@ app.post('/resend-otp', async (req, res) => {
       });
       return res.status(400).json({ error: 'Verification period expired. Account deleted. Please sign up again.', timestamp: resendTime });
     }
-
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = Date.now() + 10 * 60 * 1000;
-
     await db.execute({
       sql: 'INSERT OR REPLACE INTO user_otp_verification (email, otp, expires_at, created_at) VALUES (?, ?, ?, ?)',
       args: [email, otp, expiresAt, resendTime],
     });
-
     try {
       await sendOTP(email, otp);
       res.status(200).json({ success: true, message: 'OTP resent successfully. Please verify within 10 minutes.', timestamp: resendTime });
@@ -670,14 +592,10 @@ app.post('/resend-otp', async (req, res) => {
   }
 });
 
-// Explicit logout endpoint
 app.post('/logout', authenticateJWT, (req, res) => {
   const token = req.headers.authorization.slice(7);
   const logoutTime = getISTTimestamp();
-
-  // Remove token from active set
   activeTokens.delete(token);
-
   res.json({
     success: true,
     message: 'Logged out successfully. Token invalidated.',
@@ -685,25 +603,21 @@ app.post('/logout', authenticateJWT, (req, res) => {
   });
 });
 
-// Emergency token invalidation (for app uninstall/data clear)
 app.post('/invalidate-all', async (req, res) => {
   const { email, password } = req.body;
   const invalidationTime = getISTTimestamp();
-
   if (!email || !password) {
     return res.status(400).json({
       error: 'Email and password are required',
       timestamp: invalidationTime
     });
   }
-
   try {
     const db = getDB();
     const result = await db.execute({
       sql: 'SELECT user_id FROM user_profiles WHERE email = ?',
       args: [email],
     });
-
     const user = result.rows[0];
     if (!user) {
       return res.status(404).json({
@@ -711,13 +625,10 @@ app.post('/invalidate-all', async (req, res) => {
         timestamp: invalidationTime
       });
     }
-
-    // Verify password
     const pwResult = await db.execute({
       sql: 'SELECT password_hash FROM user_profiles WHERE user_id = ?',
       args: [user.user_id],
     });
-
     const isMatch = await bcrypt.compare(password, pwResult.rows[0].password_hash);
     if (!isMatch) {
       return res.status(401).json({
@@ -725,10 +636,7 @@ app.post('/invalidate-all', async (req, res) => {
         timestamp: invalidationTime
       });
     }
-
-    // In production: Query all tokens for this user from Redis/db and remove
     activeTokens.clear();
-
     res.json({
       success: true,
       message: 'All sessions invalidated successfully',
@@ -743,23 +651,20 @@ app.post('/invalidate-all', async (req, res) => {
   }
 });
 
-// Protected progress update endpoint
+// Progress endpoints with XP rewards
 app.post('/progress', authenticateJWT, async (req, res) => {
   const { language, level, module_id, lesson_id, is_completed, current_question_index } = req.body;
   const updateTime = getISTTimestamp();
-
   if (!language || level === undefined || module_id === undefined || lesson_id === undefined) {
     return res.status(400).json({
       error: 'Missing required fields',
       timestamp: updateTime
     });
   }
-
   try {
     const db = getDB();
     const bitPosition = 1 << (lesson_id - 1);
     const maskUpdate = is_completed ? bitPosition : 0;
-
     await db.execute({
       sql: `
         INSERT INTO user_module_progress 
@@ -792,6 +697,34 @@ app.post('/progress', authenticateJWT, async (req, res) => {
       ],
     });
 
+    // XP logic for module and level completion
+    // Check if the module is completed
+    const { rows: moduleDetails } = await db.execute({
+      sql: 'SELECT total_lessons FROM lesson_details WHERE language = ? AND level = ? AND module_id = ?',
+      args: [language, level, module_id]
+    });
+    if (moduleDetails.length > 0) {
+      const totalLessons = moduleDetails[0].total_lessons;
+      const { rows: userProgress } = await db.execute({
+        sql: 'SELECT completion_mask FROM user_module_progress WHERE user_id = ? AND language = ? AND level = ? AND module_id = ?',
+        args: [req.user.id, language, level, module_id]
+      });
+      if (userProgress.length > 0) {
+        const mask = userProgress[0].completion_mask;
+        const allLessonsMask = (1 << totalLessons) - 1;
+        if ((mask & allLessonsMask) === allLessonsMask) {
+          // Module completed, reward 10 XP
+          await addXpToUser(req.user.id, 10);
+          // Now check if this was the last module for this level
+          const allModulesCompleted = await checkAllModulesCompletedForLevel(req.user.id, language, level);
+          if (allModulesCompleted) {
+            // Level completed, reward 40 XP
+            await addXpToUser(req.user.id, 40);
+          }
+        }
+      }
+    }
+
     res.json({
       success: true,
       message: 'Progress updated successfully',
@@ -813,7 +746,6 @@ app.get('/progress', authenticateJWT, async (req, res) => {
       sql: 'SELECT * FROM user_module_progress WHERE user_id = ?',
       args: [req.user.id],
     });
-
     res.json({
       success: true,
       progress: result.rows
@@ -824,23 +756,33 @@ app.get('/progress', authenticateJWT, async (req, res) => {
   }
 });
 
-// Get user profile
+// XP achievements endpoint
+app.get('/achievements', authenticateJWT, async (req, res) => {
+  try {
+    const db = getDB();
+    const { rows } = await db.execute({
+      sql: 'SELECT xp_points FROM user_achievements WHERE user_id = ?',
+      args: [req.user.id]
+    });
+    res.json({ success: true, xp_points: rows[0]?.xp_points || 0 });
+  } catch (err) {
+    res.status(500).json({ success: false, error: 'Failed to fetch achievements' });
+  }
+});
+
 app.get('/profile', authenticateJWT, async (req, res) => {
   try {
-    // Validate user ID
     if (!req.user.id) {
       return res.status(400).json({
         error: 'Invalid user ID',
         timestamp: getISTTimestamp()
       });
     }
-
     const db = getDB();
     const result = await db.execute({
       sql: 'SELECT user_id, username, email, is_google_auth, created_at, last_login, is_verified FROM user_profiles WHERE user_id = ?',
       args: [req.user.id]
     });
-
     const user = result.rows[0];
     if (!user) {
       return res.status(404).json({
@@ -848,7 +790,6 @@ app.get('/profile', authenticateJWT, async (req, res) => {
         timestamp: getISTTimestamp()
       });
     }
-
     res.json({
       success: true,
       message: 'Profile fetched successfully',
@@ -873,7 +814,6 @@ app.get('/profile', authenticateJWT, async (req, res) => {
   }
 });
 
-// Start server
 app.listen(PORT, () => {
   console.log(`Server started at ${getISTTimestamp()} on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
