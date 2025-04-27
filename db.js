@@ -73,7 +73,7 @@ export async function initDB() {
       }
     ]);
 
-    // Apply the ALTER TABLE to add is_verified if it doesn't exist
+    // Add is_verified if missing (legacy)
     await db.execute(`
       ALTER TABLE user_profiles ADD COLUMN is_verified BOOLEAN DEFAULT 0;
     `).catch(err => {
@@ -82,7 +82,7 @@ export async function initDB() {
       }
     });
 
-    // Apply the ALTER TABLE to add expires_at if it doesn't exist
+    // Add expires_at if missing (for deletion of unverified users)
     await db.execute(`
       ALTER TABLE user_profiles ADD COLUMN expires_at INTEGER;
     `).catch(err => {
