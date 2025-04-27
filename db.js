@@ -20,7 +20,8 @@ export async function initDB() {
             password_hash VARCHAR(255) NOT NULL,
             is_verified BOOLEAN DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_login TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            last_login TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at INTEGER
           )
         `,
       },
@@ -76,7 +77,15 @@ export async function initDB() {
     await db.execute(`
       ALTER TABLE user_profiles ADD COLUMN is_verified BOOLEAN DEFAULT 0;
     `).catch(err => {
-      // Ignore error if column already exists
+      if (!err.message.includes('duplicate column name')) {
+        throw err;
+      }
+    });
+
+    // Apply the ALTER TABLE to add expires_at if it doesn't exist
+    await db.execute(`
+      ALTER TABLE user_profiles ADD COLUMN expires_at INTEGER;
+    `).catch(err => {
       if (!err.message.includes('duplicate column name')) {
         throw err;
       }
