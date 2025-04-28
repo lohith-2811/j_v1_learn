@@ -913,6 +913,49 @@ app.get('/profile', authenticateJWT, async (req, res) => {
   }
 });
 
+
+// Leaderboard endpoint: Return top users by XP
+app.get('/leaderboard', authenticateJWT, async (req, res) => {
+  try {
+    const db = getDB();
+    // Join profiles and achievements, show users with XP (default 0 if no row in user_achievements)
+    const result = await db.execute({
+      sql: `
+        SELECT 
+          u.user_id, 
+          u.username, 
+          u.email, 
+          COALESCE(a.xp_points, 0) AS xp_points
+        FROM user_profiles u
+        LEFT JOIN user_achievements a ON u.user_id = a.user_id
+        ORDER BY xp_points DESC, u.username ASC
+        LIMIT 100
+      `,
+      args: [],
+    });
+
+    // You can filter out unverified users if needed:
+    // WHERE u.is_verified = 1
+
+    res.json({
+      success: true,
+      leaderboard: result.rows.map(row => ({
+        user_id: row.user_id,
+        username: row.username,
+        email: row.email,
+        xp: row.xp_points
+      }))
+    });
+  } catch (err) {
+    console.error('Leaderboard fetch error:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch leaderboard'
+    });
+  }
+});
+
+
 // Start server
 app.listen(PORT, () => {
   console.log(`Server started at ${getISTTimestamp()} on port ${PORT}`);
