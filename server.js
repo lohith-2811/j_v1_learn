@@ -913,22 +913,42 @@ app.get('/profile', authenticateJWT, async (req, res) => {
   }
 });
 
-// switched-course endpoint
+// Save Switched Course
 app.post('/save-switched-course', authenticateJWT, async (req, res) => {
-  const { courseId, language, level } = req.body;
+  const { courseId, language } = req.body;
   const saveTime = getISTTimestamp();
 
-  if (!courseId || !language || typeof level === 'undefined') {
+  if (!courseId || !language) {
     return res.status(400).json({
       success: false,
-      error: 'Missing required fields: courseId, language, level',
+      error: 'Missing required fields: courseId, language',
       timestamp: saveTime
     });
   }
 
   try {
     const db = getDB();
-    // Upsert the switched course for the user
+
+    // Determine the latest level from user_module_progress
+    const progressResult = await db.execute({
+      sql: 'SELECT MAX(level) as max_level FROM user_module_progress WHERE user_id = ? AND language = ?',
+      args: [req.user.id, language]
+    });
+
+    let level = 1; // Default to level 1
+    if (progressResult.rows.length > 0 && progressResult.rows[0].max_level !== null) {
+      level = progressResult.rows[0].max_level;
+      // Check if the next level exists in lesson_details
+      const nextLevelResult = await db.execute({
+        sql: 'SELECT level FROM lesson_details WHERE language = ? AND level = ?',
+        args: [language, level + 1]
+      });
+      if (nextLevelResult.rows.length > 0) {
+        level += 1; // Move to the next level if available
+      }
+    }
+
+    // Upsert the switched course
     await db.execute({
       sql: `
         INSERT INTO user_switched_course (user_id, course_id, language, level, switched_at)
@@ -945,6 +965,7 @@ app.post('/save-switched-course', authenticateJWT, async (req, res) => {
     res.json({
       success: true,
       message: 'Switched course saved successfully',
+      level: level, // Return the assigned level for frontend use
       timestamp: saveTime
     });
   } catch (err) {
@@ -957,8 +978,7 @@ app.post('/save-switched-course', authenticateJWT, async (req, res) => {
   }
 });
 
-
-// Get the user's last switched course (GET)
+// Get Switched Course
 app.get('/switched-course', authenticateJWT, async (req, res) => {
   const getTime = getISTTimestamp();
   try {
