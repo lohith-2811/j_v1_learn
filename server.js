@@ -913,6 +913,87 @@ app.get('/profile', authenticateJWT, async (req, res) => {
   }
 });
 
+// switched-course endpoint
+app.post('/save-switched-course', authenticateJWT, async (req, res) => {
+  const { courseId, language, level } = req.body;
+  const saveTime = getISTTimestamp();
+
+  if (!courseId || !language || typeof level === 'undefined') {
+    return res.status(400).json({
+      success: false,
+      error: 'Missing required fields: courseId, language, level',
+      timestamp: saveTime
+    });
+  }
+
+  try {
+    const db = getDB();
+    // Upsert the switched course for the user
+    await db.execute({
+      sql: `
+        INSERT INTO user_switched_course (user_id, course_id, language, level, switched_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+          course_id = excluded.course_id,
+          language = excluded.language,
+          level = excluded.level,
+          switched_at = excluded.switched_at
+      `,
+      args: [req.user.id, courseId, language, level, saveTime]
+    });
+
+    res.json({
+      success: true,
+      message: 'Switched course saved successfully',
+      timestamp: saveTime
+    });
+  } catch (err) {
+    console.error('Save switched course error at', saveTime, ':', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to save switched course',
+      timestamp: saveTime
+    });
+  }
+});
+
+
+// Get the user's last switched course (GET)
+app.get('/switched-course', authenticateJWT, async (req, res) => {
+  const getTime = getISTTimestamp();
+  try {
+    const db = getDB();
+    const result = await db.execute({
+      sql: `
+        SELECT course_id, language, level, switched_at
+        FROM user_switched_course
+        WHERE user_id = ?
+      `,
+      args: [req.user.id]
+    });
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'No switched course found for user',
+        timestamp: getTime
+      });
+    }
+
+    res.json({
+      success: true,
+      switchedCourse: result.rows[0],
+      timestamp: getTime
+    });
+  } catch (err) {
+    console.error('Get switched course error at', getTime, ':', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get switched course',
+      timestamp: getTime
+    });
+  }
+});
 
 // Leaderboard endpoint: Return top users by XP
 app.get('/leaderboard', authenticateJWT, async (req, res) => {
