@@ -20,8 +20,7 @@ export async function initDB() {
             password_hash VARCHAR(255) NOT NULL,
             is_verified BOOLEAN DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_login TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            expires_at INTEGER
+            last_login TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           )
         `,
       },
@@ -70,22 +69,26 @@ export async function initDB() {
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
           )
         `,
+      },
+      {
+        sql: `
+          CREATE TABLE IF NOT EXISTS user_switched_course (
+            user_id INTEGER PRIMARY KEY,
+            course_id TEXT NOT NULL,
+            language TEXT NOT NULL,
+            level INTEGER NOT NULL,
+            switched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
+          )
+        `,
       }
     ]);
 
-    // Add is_verified if missing (legacy)
+    // Apply the ALTER TABLE to add is_verified if it doesn't exist
     await db.execute(`
       ALTER TABLE user_profiles ADD COLUMN is_verified BOOLEAN DEFAULT 0;
     `).catch(err => {
-      if (!err.message.includes('duplicate column name')) {
-        throw err;
-      }
-    });
-
-    // Add expires_at if missing (for deletion of unverified users)
-    await db.execute(`
-      ALTER TABLE user_profiles ADD COLUMN expires_at INTEGER;
-    `).catch(err => {
+      // Ignore error if column already exists
       if (!err.message.includes('duplicate column name')) {
         throw err;
       }
