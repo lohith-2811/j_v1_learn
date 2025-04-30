@@ -17,10 +17,12 @@ export async function initDB() {
             user_id INTEGER PRIMARY KEY AUTOINCREMENT,
             username VARCHAR(255) NOT NULL,
             email VARCHAR(255) NOT NULL UNIQUE,
-            password_hash VARCHAR(255) NOT NULL,
+            password_hash VARCHAR(255),
+            is_google_auth BOOLEAN DEFAULT 0,
             is_verified BOOLEAN DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            last_login TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            last_login TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at INTEGER
           )
         `,
       },
@@ -78,6 +80,30 @@ export async function initDB() {
             language TEXT NOT NULL,
             level INTEGER NOT NULL,
             switched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
+          )
+        `,
+      },
+      {
+        sql: `
+          CREATE TABLE IF NOT EXISTS stock (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            voucher_name VARCHAR(255) NOT NULL,
+            voucher_code VARCHAR(50) NOT NULL UNIQUE,
+            expire_date INTEGER NOT NULL,
+            points_price INTEGER NOT NULL
+          )
+        `,
+      },
+      {
+        sql: `
+          CREATE TABLE IF NOT EXISTS user_vouchers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            voucher_name VARCHAR(255) NOT NULL,
+            voucher_code VARCHAR(50) NOT NULL UNIQUE,
+            redeemed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expire_date INTEGER NOT NULL,
             FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
           )
         `,
