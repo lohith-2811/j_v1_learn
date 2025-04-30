@@ -7,6 +7,7 @@ import cors from 'cors';
 import nodemailer from 'nodemailer';
 import fs from 'fs';
 import admin from 'firebase-admin';
+import { v4 as uuidv4 } from 'uuid';
 
 // Load environment variables
 dotenv.config();
@@ -52,6 +53,29 @@ function getISTTimestamp() {
   const ISTTime = new Date(now.getTime() + (ISTOffset - now.getTimezoneOffset()) * 60000);
   return ISTTime.toISOString().replace('T', ' ').replace('.000Z', '');
 }
+
+
+// Schedule cleanup of vouchers (runs every hour)
+setInterval(async () => {
+  try {
+    const db = getDB();
+    const oneDayBefore = Date.now() + 24 * 60 * 60 * 1000; // One day from now
+    // Delete from stock one day before expire_date
+    await db.execute({
+      sql: 'DELETE FROM stock WHERE expire_date < ?',
+      args: [oneDayBefore]
+    });
+    // Delete expired from user_vouchers
+    await db.execute({
+      sql: 'DELETE FROM user_vouchers WHERE expire_date < ?',
+      args: [Date.now()]
+    });
+    console.log('Expired vouchers deleted at', getISTTimestamp());
+  } catch (err) {
+    console.error('Error deleting expired vouchers at', getISTTimestamp(), ':', err);
+  }
+}, 60 * 60 * 1000); // Every hour
+
 
 // Health check endpoint with IST timestamp
 app.get('/', (req, res) => {
@@ -143,6 +167,9 @@ export const sendOTP = async (to, otp, purpose = 'email verification') => {
     throw new Error(`Failed to send OTP: ${err.message}`);
   }
 };
+
+
+
 
 // Google Sign-In (Firebase Auth) Endpoint
 app.post('/auth/google', async (req, res) => {
@@ -1052,6 +1079,162 @@ app.get('/leaderboard', authenticateJWT, async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to fetch leaderboard'
+    });
+  }
+});
+
+
+
+
+// vouchers Endpoint
+app.get('/vouchers', authenticateJWT, async (req, res) => {
+  try {
+    const db = getDB();
+    // Group by voucher_name to get distinct vouchers with points_price
+    const result = await db.execute({
+      sql: `
+        SELECT voucher_name, points_price
+        FROM stock
+        GROUP BY voucher_name, points_price
+        HAVING COUNT(voucher_code) > 0
+      `,
+      args: []
+    });
+    res.json({
+      success: true,
+      vouchers: result.rows.map(row => ({
+        voucher_name: row.voucher_name,
+        points_price: row.points_price
+      }))
+    });
+  } catch (err) {
+    console.error('Fetch vouchers error at', getISTTimestamp(), ':', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch vouchers'
+    });
+  }
+});
+
+app.post('/voucher/redeem', authenticateJWT, async (req, res) => {
+  const { voucher_name } = req.body;
+  const redeemTime = getISTTimestamp();
+
+  if (!voucher_name) {
+    return res.status(400).json({
+      error: 'voucher_name is required',
+      timestamp: redeemTime
+    });
+  }
+
+  try {
+    const db = getDB();
+
+    // Fetch an available voucher code from stock
+    const voucherResult = await db.execute({
+      sql: `
+        SELECT id, voucher_code, points_price, expire_date
+        FROM stock
+        WHERE voucher_name = ? AND expire_date > ?
+        LIMIT 1
+      `,
+      args: [voucher_name, Date.now() + 24 * 60 * 60 * 1000] // Ensure not expiring soon
+    });
+
+    if (voucherResult.rows.length === 0) {
+      return res.status(404).json({
+        error: 'No valid voucher available for this voucher name',
+        timestamp: redeemTime
+      });
+    }
+
+    const { id, voucher_code, points_price, expire_date } = voucherResult.rows[0];
+
+    // Check user's XP balance
+    const xpResult = await db.execute({
+      sql: 'SELECT xp_points FROM user_achievements WHERE user_id = ?',
+      args: [req.user.id]
+    });
+
+    const currentXp = xpResult.rows[0]?.xp_points || 0;
+    if (currentXp < points_price) {
+      return res.status(400).json({
+        error: 'Insufficient XP points',
+        timestamp: redeemTime
+      });
+    }
+
+    // Deduct XP points
+    await db.execute({
+      sql: 'UPDATE user_achievements SET xp_points = xp_points - ? WHERE user_id = ?',
+      args: [points_price, req.user.id]
+    });
+
+    // Store in user_vouchers
+    await db.execute({
+      sql: `
+        INSERT INTO user_vouchers (user_id, voucher_name, voucher_code, expire_date)
+        VALUES (?, ?, ?, ?)
+      `,
+      args: [req.user.id, voucher_name, voucher_code, expire_date]
+    });
+
+    // Delete from stock
+    await db.execute({
+      sql: 'DELETE FROM stock WHERE id = ?',
+      args: [id]
+    });
+
+    res.json({
+      success: true,
+      voucherCode: voucher_code,
+      expiresAt: expire_date,
+      message: 'Voucher redeemed successfully',
+      timestamp: redeemTime
+    });
+  } catch (err) {
+    console.error('Redeem voucher error at', redeemTime, ':', err);
+    if (err.message.includes('UNIQUE constraint failed')) {
+      return res.status(400).json({
+        error: 'This voucher code has already been redeemed',
+        timestamp: redeemTime
+      });
+    }
+    res.status(500).json({
+      success: false,
+      error: 'Failed to redeem voucher',
+      timestamp: redeemTime
+    });
+  }
+});
+
+app.get('/user/vouchers', authenticateJWT, async (req, res) => {
+  try {
+    const db = getDB();
+    const result = await db.execute({
+      sql: `
+        SELECT id, voucher_name, voucher_code, redeemed_at, expire_date
+        FROM user_vouchers
+        WHERE user_id = ? AND expire_date > ?
+      `,
+      args: [req.user.id, Date.now()]
+    });
+
+    res.json({
+      success: true,
+      vouchers: result.rows.map(row => ({
+        id: row.id,
+        voucher_name: row.voucher_name,
+        voucher_code: row.voucher_code,
+        redeemed_at: row.redeemed_at,
+        expires_at: row.expire_date
+      }))
+    });
+  } catch (err) {
+    console.error('Fetch user vouchers error at', getISTTimestamp(), ':', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch user vouchers'
     });
   }
 });
