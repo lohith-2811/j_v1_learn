@@ -169,6 +169,139 @@ export const sendOTP = async (to, otp, purpose = 'email verification') => {
 };
 
 
+// Voucher email sender
+export const sendVoucherEmail = async (to, voucherDetails) => {
+  const { voucherName, voucherCode, expireDate } = voucherDetails;
+  try {
+    const expireDateFormatted = new Date(expireDate).toLocaleString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    });
+
+    const subject = `Order Confirmed: Your ${voucherName} voucher has been successfully redeemed!`;
+    const html = `
+     <!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://fonts.googleapis.com/css2?family=Pacifico&family=PT+Serif&family=Satisfy&display=swap" rel="stylesheet">
+  <style>
+    body { margin: 0; padding: 0; font-family: 'PT Serif', serif; background-color: #f5f5f5; }
+    .container { max-width: 400px; margin: 20px auto; background-color: #000000; padding: 16px; }
+    .card { background: #ffffff; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); overflow: hidden; position: relative; }
+    .top-section { background: linear-gradient(180deg, #ffffff 0%, #e0f2e9 100%); padding: 20px; text-align: center; border-bottom: 2px dashed #14803C; }
+    .voucher-name { font-family: 'Pacifico', cursive; font-size: 26px; color: #000000; margin: 0; }
+    .expiry-date { font-family: 'PT Serif', serif; font-size: 14px; color: #555555; margin-top: 10px; }
+    .value { font-family: 'PT Serif', serif; font-size: 18px; font-weight: bold; color: #14803C; margin-top: 5px; }
+    .zigzag-divider { height: 12px; background: repeating-linear-gradient(45deg, #14803C, #14803C 10px, transparent 10px, transparent 20px); }
+    .bottom-section { background: #4CAF50; padding: 20px; text-align: center; }
+    .voucher-code { font-family: 'Courier New', monospace; font-size: 24px; font-weight: bold; letter-spacing: 2px; color: #FFFFFF; margin: 0; background: rgba(0,0,0,0.1); padding: 8px; border-radius: 4px; }
+    .validity { margin-top: 16px; text-align: center; color: #FFFFFF; font-family: 'Satisfy', cursive; font-size: 14px; }
+    .validity img { vertical-align: middle; margin-right: 8px; }
+    .terms { padding: 15px; font-size: 12px; color: #666; text-align: center; border-top: 1px dashed #ccc; }
+    .perforation { 
+      position: absolute; 
+      bottom: 50px; 
+      left: 0; 
+      right: 0; 
+      height: 10px; 
+      background: 
+        linear-gradient(to right, #f5f5f5 0%, #f5f5f5 50%, transparent 50%, transparent 100%),
+        linear-gradient(to right, black 0%, black 50%, transparent 50%, transparent 100%);
+      background-size: 20px 2px, 20px 2px;
+      background-position: 0 0, 0 4px;
+      background-repeat: repeat-x;
+    }
+    .tear-off { 
+      background: #f5f5f5; 
+      padding: 15px; 
+      text-align: center; 
+      font-size: 12px; 
+      color: #888;
+      border-bottom-left-radius: 8px;
+      border-bottom-right-radius: 8px;
+    }
+    .corner { 
+      position: absolute; 
+      width: 30px; 
+      height: 30px; 
+      background: #f5f5f5; 
+      border-radius: 50%; 
+      top: -15px; 
+      right: -15px; 
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="corner"></div>
+      <div class="top-section">
+        <h1 class="voucher-name">${voucherName}</h1>
+        <p class="expiry-date">Valid until: ${expireDateFormatted}</p>
+      </div>
+      
+      <div class="perforation"></div>
+      
+      <div class="bottom-section">
+        <p>YOUR PROMO CODE</p>
+        <p class="voucher-code">${voucherCode}</p>
+        <div class="validity">
+          <span>Valid once per customer</span>
+        </div>
+      </div>
+      
+      <div class="terms">
+        * Terms and conditions apply. Not valid with other offers. 
+        Present this voucher at checkout to redeem.
+      </div>
+    </div>
+    
+    <div class="tear-off">
+      <p>Jairisys.tech</p>
+    </div>
+  </div>
+</body>
+</html>
+    `;
+
+    const text = `
+      Voucher Redeemed Successfully!
+
+      Dear User,
+
+      You have successfully redeemed a voucher. Here are the details:
+      - Voucher Name: ${voucherName}
+      - Voucher Code: ${voucherCode}
+      - Expires On: ${expireDateFormatted}
+      - Valid once per user
+
+      Please use this voucher before it expires. Contact support if you have any issues.
+
+      Best regards,
+      Jairisys Team
+    `;
+
+    const info = await transporter.sendMail({
+      from: `"JLearn" <${process.env.EMAIL_USER}>`,
+      to,
+      subject,
+      html,
+      text,
+    });
+
+    console.log(`Voucher email sent successfully to ${to}. Message ID:`, info.messageId);
+    return info;
+  } catch (err) {
+    console.error(`Failed to send voucher email to ${to}:`, err);
+    throw new Error(`Failed to send voucher email: ${err.message}`);
+  }
+};
+
+
+
 
 
 // Google Sign-In (Firebase Auth) Endpoint
@@ -1116,6 +1249,8 @@ app.get('/vouchers', authenticateJWT, async (req, res) => {
   }
 });
 
+// Voucher redeem
+
 app.post('/voucher/redeem', authenticateJWT, async (req, res) => {
   const { voucher_name } = req.body;
   const redeemTime = getISTTimestamp();
@@ -1138,7 +1273,7 @@ app.post('/voucher/redeem', authenticateJWT, async (req, res) => {
         WHERE voucher_name = ? AND expire_date > ?
         LIMIT 1
       `,
-      args: [voucher_name, Date.now() + 24 * 60 * 60 * 1000] // Ensure not expiring soon
+      args: [voucher_name, Date.now() + 24 * 60 * 60 * 1000]
     });
 
     if (voucherResult.rows.length === 0) {
@@ -1185,21 +1320,38 @@ app.post('/voucher/redeem', authenticateJWT, async (req, res) => {
       args: [id]
     });
 
+    // Fetch user's email from the user_profiles table
+    const userResult = await db.execute({
+      sql: 'SELECT email FROM user_profiles WHERE user_id = ?',
+      args: [req.user.id]
+    });
+
+    const userEmail = userResult.rows[0]?.email;
+    let emailSent = false;
+    if (userEmail) {
+      try {
+        await sendVoucherEmail(userEmail, {
+          voucherName: voucher_name,
+          voucherCode: voucher_code,
+          expireDate: expire_date
+        });
+        emailSent = true;
+      } catch (emailErr) {
+        console.warn(`Voucher redeemed, but email failed to send for ${userEmail}:`, emailErr);
+      }
+    }
+
     res.json({
       success: true,
       voucherCode: voucher_code,
       expiresAt: expire_date,
-      message: 'Voucher redeemed successfully',
+      message: emailSent
+        ? 'Voucher redeemed successfully and email sent!'
+        : 'Voucher redeemed successfully, but email failed to send. Please check your vouchers in the app.',
       timestamp: redeemTime
     });
   } catch (err) {
     console.error('Redeem voucher error at', redeemTime, ':', err);
-    if (err.message.includes('UNIQUE constraint failed')) {
-      return res.status(400).json({
-        error: 'This voucher code has already been redeemed',
-        timestamp: redeemTime
-      });
-    }
     res.status(500).json({
       success: false,
       error: 'Failed to redeem voucher',
