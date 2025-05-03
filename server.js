@@ -572,7 +572,7 @@ export const sendWelcomeEmail = async (to, username) => {
       Welcome to Jairisys! We're thrilled to have you join our learning community. Get ready to explore a world of knowledge and enhance your skills with our interactive courses.
 
       Your Journey Starts Here
-      Log in now to start learning and earn rewards! Visit: https://jairisys.tech/login
+      Log in now to start learning and earn rewards! Visit: https://jairisys.tech/
 
       If you have any questions or need assistance, feel free to contact our support team.
 
