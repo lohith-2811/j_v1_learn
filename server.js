@@ -1240,6 +1240,48 @@ app.get('/user/vouchers', authenticateJWT, async (req, res) => {
 });
 
 
+// Delete user account endpoint
+app.delete('/account', authenticateJWT, async (req, res) => {
+  const db = getDB();
+  const userId = req.user.id;
+  const userEmail = req.user.email;
+  const deletionTime = getISTTimestamp();
+
+  try {
+    // Delete related data first (optional: uncomment if applicable)
+    await db.execute({
+      sql: 'DELETE FROM user_vouchers WHERE user_id = ?',
+      args: [userId],
+    });
+
+    // Delete user profile
+    const result = await db.execute({
+      sql: 'DELETE FROM user_profiles WHERE user_id = ?',
+      args: [userId],
+    });
+
+    // Invalidate the token (remove from activeTokens)
+    const authHeader = req.headers.authorization || req.query.token;
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
+    activeTokens.delete(token);
+
+    console.log(`User account deleted: user_id=${userId}, email=${userEmail} at`, deletionTime);
+
+    res.json({
+      success: true,
+      message: 'Your account has been deleted successfully.',
+      timestamp: deletionTime
+    });
+  } catch (err) {
+    console.error('Error deleting user account at', deletionTime, ':', err);
+    res.status(500).json({
+      error: 'Failed to delete account. Please try again later.',
+      timestamp: deletionTime
+    });
+  }
+});
+
+
 // Start server
 app.listen(PORT, () => {
   console.log(`Server started at ${getISTTimestamp()} on port ${PORT}`);
