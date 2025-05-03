@@ -149,15 +149,165 @@ export const transporter = nodemailer.createTransport({
 export const sendOTP = async (to, otp, purpose = 'email verification') => {
   try {
     const subject = purpose === 'password reset' ? 'Reset Your JLearn Password' : 'Verify Your Email with Jairisys';
-    const html = purpose === 'password reset'
-      ? `<p>Your password reset OTP is: <strong>${otp}</strong></p><p>It will expire in 10 minutes.</p>`
-      : `<p>Your OTP code is: <strong>${otp}</strong></p><p>It will expire in 10 minutes. Please verify within this time, or your account will be deleted.</p>`;
+    
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+        <style>
+          body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Poppins', sans-serif;
+            background-color: #f7f9fc;
+            color: #333;
+          }
+          .container {
+            max-width: 600px;
+            margin: 20px auto;
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+          }
+          .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 30px;
+            text-align: center;
+            color: white;
+          }
+          .logo {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 10px;
+          }
+          .content {
+            padding: 30px;
+          }
+          .otp-container {
+            background: #f0f4ff;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 25px 0;
+            text-align: center;
+          }
+          .otp-code {
+            font-size: 32px;
+            font-weight: 700;
+            letter-spacing: 5px;
+            color: #2c3e50;
+            margin: 15px 0;
+            padding: 10px 20px;
+            background: white;
+            border-radius: 6px;
+            display: inline-block;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+          }
+          .footer {
+            background: #f0f4ff;
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+            color: #7f8c8d;
+          }
+          .warning {
+            color: #e74c3c;
+            font-weight: 600;
+            margin-top: 20px;
+            padding: 10px;
+            background: #fde8e8;
+            border-radius: 6px;
+            text-align: center;
+          }
+          .divider {
+            height: 1px;
+            background: linear-gradient(to right, transparent, #ddd, transparent);
+            margin: 25px 0;
+          }
+          .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 15px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <div class="logo">Jairisys</div>
+            <h2>${purpose === 'password reset' ? 'Password Reset' : 'Account Verification'}</h2>
+          </div>
+          
+          <div class="content">
+            <p>Hello,</p>
+            
+            <p>${purpose === 'password reset' 
+              ? 'You requested to reset your password. Use the following OTP to proceed:'
+              : 'Thank you for signing up! Please verify your account using this OTP:'}</p>
+            
+            <div class="otp-container">
+              <p>Your One-Time Password</p>
+              <div class="otp-code">${otp}</div>
+              <p>Valid for 10 minutes only</p>
+            </div>
+            
+            ${purpose !== 'password reset' 
+              ? '<div class="warning">Please verify within this time, or your account will be deleted.</div>'
+              : ''}
+            
+            <div class="divider"></div>
+            
+            <p>If you didn\'t request this, please ignore this email or contact support if you have questions.</p>
+            
+            <p>Best regards,<br>Jairisys Team</p>
+          </div>
+          
+          <div class="footer">
+            © ${new Date().getFullYear()} Jairisys.tech. All rights reserved.
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const text = `
+      Jairisys ${purpose === 'password reset' ? 'Password Reset' : 'Account Verification'}
+
+      Hello,
+
+      ${purpose === 'password reset' 
+        ? 'You requested to reset your password. Use the following OTP to proceed:'
+        : 'Thank you for signing up! Please verify your account using this OTP:'}
+
+      OTP: ${otp}
+      Valid for 10 minutes only
+
+      ${purpose !== 'password reset' 
+        ? 'Please verify within this time, or your account will be deleted.'
+        : ''}
+
+      If you didn't request this, please ignore this email or contact support if you have questions.
+
+      Best regards,
+      Jairisys Team
+
+      © ${new Date().getFullYear()} Jairisys.tech. All rights reserved.
+    `;
 
     const info = await transporter.sendMail({
-      from: `"JLearn" <${process.env.EMAIL_USER}>`,
+      from: `"Jairisys" <${process.env.EMAIL_USER}>`,
       to,
       subject,
       html,
+      text,
     });
     console.log(`OTP email sent successfully to ${to} for ${purpose}. Message ID:`, info.messageId);
     return info;
