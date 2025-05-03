@@ -452,6 +452,152 @@ export const sendVoucherEmail = async (to, voucherDetails) => {
 
 
 
+// Signup welcome
+export const sendWelcomeEmail = async (to, username) => {
+  try {
+    const subject = 'Welcome to Jairisys!';
+    
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+        <style>
+          body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Poppins', sans-serif;
+            background-color: #f7f9fc;
+            color: #333;
+          }
+          .container {
+            max-width: 600px;
+            margin: 20px auto;
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+          }
+          .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 30px;
+            text-align: center;
+            color: white;
+          }
+          .logo {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 10px;
+          }
+          .content {
+            padding: 30px;
+          }
+          .welcome-container {
+            background: #f0f4ff;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 25px 0;
+            text-align: center;
+          }
+          .welcome-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: #2c3e50;
+            margin: 15px 0;
+          }
+          .footer {
+            background: #f0f4ff;
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+            color: #7f8c8d;
+          }
+          .divider {
+            height: 1px;
+            background: linear-gradient(to right, transparent, #ddd, transparent);
+            margin: 25px 0;
+          }
+          .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            margin-top: 15px;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <div class="logo">Jairisys</div>
+            <h2>Welcome Aboard!</h2>
+          </div>
+          
+          <div class="content">
+            <p>Hello${username ? `, ${username}` : ''},</p>
+            
+            <p>Welcome to Jairisys! We're thrilled to have you join our learning community. Get ready to explore a world of knowledge and enhance your skills with our interactive courses.</p>
+            
+            <div class="welcome-container">
+              <div class="welcome-title">Your Journey Starts Here</div>
+              <p>Log in now to start learning and earn rewards!</p>
+              <a href="https://jairisys.tech/login" class="btn">Start Learning</a>
+            </div>
+            
+            <div class="divider"></div>
+            
+            <p>If you have any questions or need assistance, feel free to contact our support team.</p>
+            
+            <p>Best regards,<br>Jairisys Team</p>
+          </div>
+          
+          <div class="footer">
+            © ${new Date().getFullYear()} Jairisys.tech. All rights reserved.
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const text = `
+      Welcome to Jairisys!
+
+      Hello${username ? `, ${username}` : ''},
+
+      Welcome to Jairisys! We're thrilled to have you join our learning community. Get ready to explore a world of knowledge and enhance your skills with our interactive courses.
+
+      Your Journey Starts Here
+      Log in now to start learning and earn rewards! Visit: https://jairisys.tech/login
+
+      If you have any questions or need assistance, feel free to contact our support team.
+
+      Best regards,
+      Jairisys Team
+
+      © ${new Date().getFullYear()} Jairisys.tech. All rights reserved.
+    `;
+
+    const info = await transporter.sendMail({
+      from: `"Jairisys" <${process.env.EMAIL_USER}>`,
+      to,
+      subject,
+      html,
+      text,
+    });
+    console.log(`Welcome email sent successfully to ${to}. Message ID:`, info.messageId);
+    return info;
+  } catch (err) {
+    console.error(`Failed to send welcome email to ${to}:`, err);
+    throw new Error(`Failed to send welcome email: ${err.message}`);
+  }
+};
+
+
 
 
 // Google Sign-In (Firebase Auth) Endpoint
@@ -716,12 +862,17 @@ app.post('/verify-otp', async (req, res) => {
 
     // Check if user exists
     const userResult = await db.execute({
-      sql: 'SELECT user_id FROM user_profiles WHERE email = ?',
+      sql: 'SELECT user_id, username, is_verified FROM user_profiles WHERE email = ?',
       args: [email],
     });
 
     if (userResult.rows.length === 0) {
       return res.status(404).json({ error: 'User not found. Account may have been deleted due to unverified status.', timestamp: verifyTime });
+    }
+
+    const user = userResult.rows[0];
+    if (user.is_verified) {
+      return res.status(400).json({ error: 'Email already verified', timestamp: verifyTime });
     }
 
     const result = await db.execute({
@@ -763,6 +914,14 @@ app.post('/verify-otp', async (req, res) => {
       sql: 'DELETE FROM user_otp_verification WHERE email = ?',
       args: [email],
     });
+
+    // Send welcome email
+    try {
+      await sendWelcomeEmail(email, user.username);
+      console.log(`Welcome email sent to ${email} after verification at ${verifyTime}`);
+    } catch (emailErr) {
+      console.warn(`Verification successful, but welcome email failed to send for ${email}:`, emailErr);
+    }
 
     res.status(200).json({ success: true, message: 'Email verified successfully', timestamp: verifyTime });
   } catch (err) {
