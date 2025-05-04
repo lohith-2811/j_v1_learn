@@ -546,7 +546,7 @@ export const sendWelcomeEmail = async (to, username) => {
             <div class="welcome-container">
               <div class="welcome-title">Your Journey Starts Here</div>
               <p>Log in now to start learning and earn rewards!</p>
-              <a href="https://jairisys.tech/login" class="btn">Start Learning</a>
+              <a href="https://jairisys.tech/index.html" class="btn">Start Learning</a>
             </div>
             
             <div class="divider"></div>
